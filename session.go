@@ -51,6 +51,7 @@ func ConnectTo(network string, addr string, proto Protocol, events chan Event, a
 	return session
 }
 
+// only call it when without autoreconnect
 func (self *Session) Start(events chan Event) {
 	self.events = events
 	go self.reader()
@@ -218,7 +219,7 @@ func (self *Session) connector() {
 			time.Sleep(CONNECT_INTERVAL * time.Millisecond)
 			self.reconnect <- true
 		} else {
-			self.events <- newEvent(EVENT_CONNECT_SUCCESS, self, err)
+			self.events <- newEvent(EVENT_CONNECT_FAILED, self, err)
 		}
 	} else {
 		log.Printf("connect to %s ok...id=%d", self.raddr, self.id)
