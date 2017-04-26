@@ -10,22 +10,18 @@ import (
 )
 
 type EchoProtocol struct {
-	header []byte
-	writer *bufio.Writer
 }
 
 func NewEchoProtocol() *EchoProtocol {
-	return &EchoProtocol{
-		header: make([]byte, 2),
-		writer: nil,
-	}
+	return &EchoProtocol{}
 }
 
 func (p *EchoProtocol) Read(conn *net.TCPConn) (interface{}, error) {
-	if _, err := io.ReadFull(conn, p.header); err != nil {
+	header := make([]byte, 2)
+	if _, err := io.ReadFull(conn, header); err != nil {
 		return nil, err
 	}
-	size := binary.BigEndian.Uint16(p.header)
+	size := binary.BigEndian.Uint16(header)
 	data := make([]byte, size)
 	if _, err := io.ReadFull(conn, data); err != nil {
 		return nil, err
@@ -62,13 +58,11 @@ func rawSend(w *bufio.Writer, data []byte) error {
 }
 
 func (p *EchoProtocol) Write(conn *net.TCPConn, data interface{}) error {
-	if p.writer == nil {
-		p.writer = bufio.NewWriter(conn)
-	}
+	writer := bufio.NewWriter(conn)
 
 	buf, err := encode([]byte(data.(string)))
 	if err != nil {
 		return err
 	}
-	return rawSend(p.writer, buf)
+	return rawSend(writer, buf)
 }
