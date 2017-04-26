@@ -1,6 +1,10 @@
 package anet
 
+import (
+	"net"
+)
+
 type Protocol interface {
-	Encode(api int16, data interface{}) ([]byte, error)
-	Decode(data []byte) (int16, interface{}, error)
+	Read(conn *net.TCPConn) (interface{}, error)
+	Write(conn *net.TCPConn, data interface{}) error
 }

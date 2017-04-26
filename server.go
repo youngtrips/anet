@@ -6,27 +6,24 @@ import (
 	"time"
 )
 
-const (
-	ID_POOL_SIZE = 32
-)
+type ServerOption struct {
+}
 
 type Server struct {
-	net    string
-	addr   string
-	ln     *net.TCPListener
-	eq     chan Event
-	idpool chan int32
-	proto  Protocol
+	net   string
+	addr  string
+	ln    *net.TCPListener
+	eq    chan Event
+	proto Protocol
 }
 
 func NewServer(net string, addr string, proto Protocol, eq chan Event) *Server {
 	srv := Server{
-		net:    net,
-		addr:   addr,
-		ln:     nil,
-		eq:     eq,
-		idpool: make(chan int32, ID_POOL_SIZE),
-		proto:  proto,
+		net:   net,
+		addr:  addr,
+		ln:    nil,
+		eq:    eq,
+		proto: proto,
 	}
 	return &srv
 }
@@ -40,13 +37,6 @@ func (s *Server) ListenAndServe() error {
 	if err != nil {
 		return err
 	}
-	go func() {
-		id := int32(1)
-		for {
-			s.idpool <- id
-			id++
-		}
-	}()
 	go func() {
 		defer ln.Close()
 		var tempDelay time.Duration // how long to sleep on accept failure
@@ -69,17 +59,12 @@ func (s *Server) ListenAndServe() error {
 				break
 			}
 			tempDelay = 0
-			id := s.nextID()
-			session := newSession(id, conn, s.proto)
+			session := newSession(conn, s.proto)
 			s.eq <- newEvent(EVENT_ACCEPT, session, nil)
 		}
 	}()
 	s.ln = ln
 	return nil
-}
-
-func (s *Server) nextID() int32 {
-	return <-s.idpool
 }
 
 func (s *Server) Close() {

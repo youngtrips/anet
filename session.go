@@ -1,21 +1,15 @@
 package anet
 
 import (
-	"bufio"
-	"bytes"
-	"encoding/binary"
-	"fmt"
-	"io"
 	"log"
 	"net"
 	"time"
 )
 
 type Session struct {
-	id            int32
 	conn          *net.TCPConn
 	proto         Protocol
-	wbuf          chan Message
+	wbuf          chan interface{}
 	events        chan Event
 	ctrl          chan bool
 	net           string
@@ -29,12 +23,11 @@ const (
 	CONNECT_INTERVAL = 1000 // reconnect interval
 )
 
-func newSession(id int32, conn *net.TCPConn, proto Protocol) *Session {
+func newSession(conn *net.TCPConn, proto Protocol) *Session {
 	sess := &Session{
-		id:            id,
 		conn:          conn,
 		proto:         proto,
-		wbuf:          make(chan Message, SEND_BUFF_SIZE),
+		wbuf:          make(chan interface{}, SEND_BUFF_SIZE),
 		events:        nil,
 		ctrl:          make(chan bool, 1),
 		net:           "",
@@ -46,7 +39,7 @@ func newSession(id int32, conn *net.TCPConn, proto Protocol) *Session {
 }
 
 func ConnectTo(network string, addr string, proto Protocol, events chan Event, autoReconnect bool) *Session {
-	session := newSession(0, nil, proto)
+	session := newSession(nil, proto)
 	session.connect(network, addr, events, autoReconnect)
 	return session
 }
@@ -58,10 +51,6 @@ func (self *Session) Start(events chan Event) {
 	go self.writer()
 }
 
-func (self *Session) ID() int32 {
-	return self.id
-}
-
 func (self *Session) Close() {
 	if self.autoReconnect {
 		self.reconnect <- false
@@ -69,16 +58,22 @@ func (self *Session) Close() {
 	self.conn.Close()
 }
 
-func (self *Session) Send(api int16, payload interface{}) {
+func (self *Session) Send(payload interface{}) {
+	defer func() {
+		if err := recover(); err != nil {
+			log.Println("send: ", err)
+		}
+	}()
+
 	if len(self.wbuf) < SEND_BUFF_SIZE {
-		self.wbuf <- Message{api, payload}
+		self.wbuf <- payload
 	} else {
 		log.Println("send overflow")
 	}
 }
 
 func (self *Session) reader() {
-	log.Printf("session[%d] start reader...", self.id)
+	log.Printf("session[%v] start reader...", self)
 	defer func() {
 		log.Println("reader quit...")
 		self.ctrl <- true
@@ -88,82 +83,30 @@ func (self *Session) reader() {
 			self.events <- newEvent(EVENT_DISCONNECT, self, nil)
 		}
 	}()
-	header := make([]byte, 2)
 	for {
-		if _, err := io.ReadFull(self.conn, header); err != nil {
-			break
-		}
-		size := binary.BigEndian.Uint16(header)
-		log.Printf("size=%d", size)
-		data := make([]byte, size)
-		if _, err := io.ReadFull(self.conn, data); err != nil {
-			self.events <- newEvent(EVENT_RECV_ERROR, self, err)
-			break
-		}
-		log.Printf("len(data)=%d", len(data))
-		log.Printf("payload: %v", data)
-		api, payload, err := self.proto.Decode(data)
-		log.Printf("api=%v, payload=%v, err=%v", api, payload, err)
+		msg, err := self.proto.Read(self.conn)
 		if err != nil {
 			self.events <- newEvent(EVENT_RECV_ERROR, self, err)
 			break
 		}
-		msg := NewMessage(api, payload)
 		self.events <- newEvent(EVENT_MESSAGE, self, msg)
 	}
 }
 
-func encode(proto Protocol, msg Message) ([]byte, error) {
-	data, err := proto.Encode(msg.Api, msg.Payload)
-	if err != nil {
-		return nil, err
-	}
-
-	buf := new(bytes.Buffer)
-	if err := binary.Write(buf, binary.BigEndian, uint16(len(data))); err != nil {
-		return nil, err
-	}
-	if err := binary.Write(buf, binary.BigEndian, data); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-func rawSend(w *bufio.Writer, data []byte) error {
-	for _, b := range data {
-		fmt.Printf("%02x ", b)
-	}
-	fmt.Printf("\n")
-
-	if _, err := w.Write(data); err != nil {
-		return err
-	}
-	if err := w.Flush(); err != nil {
-		return err
-	}
-	return nil
-}
-
 func (self *Session) writer() {
-	log.Printf("session[%d] start writer...", self.id)
+	log.Printf("session[%v] start writer...", self)
 	defer func() {
 		log.Println("writer quit ...")
 		close(self.wbuf)
 		self.conn.Close()
 	}()
-	w := bufio.NewWriter(self.conn)
 	for {
 		select {
 		case msg, ok := <-self.wbuf:
 			if ok {
-				if raw, err := encode(self.proto, msg); err != nil {
+				if err := self.proto.Write(self.conn, msg); err != nil {
 					self.events <- newEvent(EVENT_SEND_ERROR, self, err)
 					return
-				} else {
-					if err := rawSend(w, raw); err != nil {
-						self.events <- newEvent(EVENT_SEND_ERROR, self, err)
-						return
-					}
 				}
 			} else {
 				return
@@ -214,7 +157,6 @@ func (self *Session) connect(network string, addr string, events chan Event, aut
 func (self *Session) connector() {
 	conn, err := net.DialTCP(self.net, nil, self.raddr)
 	if err != nil {
-		log.Printf("connect to %s falied: %s, id=%d", self.raddr, err, self.id)
 		if self.autoReconnect {
 			time.Sleep(CONNECT_INTERVAL * time.Millisecond)
 			self.reconnect <- true
@@ -222,12 +164,12 @@ func (self *Session) connector() {
 			self.events <- newEvent(EVENT_CONNECT_FAILED, self, err)
 		}
 	} else {
-		log.Printf("connect to %s ok...id=%d", self.raddr, self.id)
+		log.Printf("connect to %s ok...session=%v", self.raddr, self)
 		self.conn = conn
 		if !self.autoReconnect {
 			self.events <- newEvent(EVENT_CONNECT_SUCCESS, self, nil)
 		} else {
-			self.wbuf = make(chan Message, SEND_BUFF_SIZE)
+			self.wbuf = make(chan interface{}, SEND_BUFF_SIZE)
 			self.Start(self.events)
 		}
 	}
