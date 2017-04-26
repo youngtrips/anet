@@ -1,9 +1,12 @@
 package anet
 
 import (
-	"log"
+	"errors"
+	"fmt"
 	"net"
 	"time"
+
+	log "github.com/Sirupsen/logrus"
 )
 
 type Session struct {
@@ -58,24 +61,25 @@ func (self *Session) Close() {
 	self.conn.Close()
 }
 
-func (self *Session) Send(payload interface{}) {
+func (self *Session) Send(payload interface{}) (err error) {
 	defer func() {
 		if err := recover(); err != nil {
-			log.Println("send: ", err)
+			log.Info("send failed: ", err)
 		}
 	}()
 
 	if len(self.wbuf) < SEND_BUFF_SIZE {
 		self.wbuf <- payload
+		err = nil
 	} else {
-		log.Println("send overflow")
+		err = errors.New(fmt.Sprintf("send overflow"))
 	}
+	return
 }
 
 func (self *Session) reader() {
-	log.Printf("session[%v] start reader...", self)
+	log.Info("session start reader: ", self)
 	defer func() {
-		log.Println("reader quit...")
 		self.ctrl <- true
 		if self.autoReconnect {
 			self.reconnect <- true
@@ -94,10 +98,9 @@ func (self *Session) reader() {
 }
 
 func (self *Session) writer() {
-	log.Printf("session[%v] start writer...", self)
+	log.Info("session start writer: ", self)
 	defer func() {
-		log.Println("writer quit ...")
-		close(self.wbuf)
+		log.Info("session writer quit: ", self)
 		self.conn.Close()
 	}()
 	for {
@@ -119,14 +122,14 @@ func (self *Session) writer() {
 
 func (self *Session) supervisor() {
 	defer func() {
-		log.Println("supervisor quit...")
+		log.Info("supervisor quit...")
 	}()
 	for {
 		select {
 		case flag, ok := <-self.reconnect:
 			if ok {
 				if flag {
-					log.Printf("reconnect to %s", self.raddr)
+					log.Infof("reconnect to %s", self.raddr)
 					go self.connector()
 				} else {
 					return
@@ -137,7 +140,7 @@ func (self *Session) supervisor() {
 }
 
 func (self *Session) connect(network string, addr string, events chan Event, autoReconnect bool) error {
-	log.Printf("try to connect to %s %s", network, addr)
+	log.Infof("try to connect to %s %s", network, addr)
 	raddr, err := net.ResolveTCPAddr(network, addr)
 	if err != nil {
 		return err
@@ -164,12 +167,11 @@ func (self *Session) connector() {
 			self.events <- newEvent(EVENT_CONNECT_FAILED, self, err)
 		}
 	} else {
-		log.Printf("connect to %s ok...session=%v", self.raddr, self)
+		log.Infof("connect to %s ok...session=%v", self.raddr, self)
 		self.conn = conn
 		if !self.autoReconnect {
 			self.events <- newEvent(EVENT_CONNECT_SUCCESS, self, nil)
 		} else {
-			self.wbuf = make(chan interface{}, SEND_BUFF_SIZE)
 			self.Start(self.events)
 		}
 	}

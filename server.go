@@ -1,13 +1,11 @@
 package anet
 
 import (
-	"log"
 	"net"
 	"time"
-)
 
-type ServerOption struct {
-}
+	log "github.com/Sirupsen/logrus"
+)
 
 type Server struct {
 	net   string
@@ -52,7 +50,7 @@ func (s *Server) ListenAndServe() error {
 					if max := 1 * time.Second; tempDelay > max {
 						tempDelay = max
 					}
-					log.Printf("http: Accept error: %v; retrying in %v", e, tempDelay)
+					log.Infof("http: Accept error: %v; retrying in %v", e, tempDelay)
 					time.Sleep(tempDelay)
 					continue
 				}
