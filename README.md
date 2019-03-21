@@ -1,4 +1,2 @@
-# anet
-
-another async network library with golang
+async network library with golang
 
